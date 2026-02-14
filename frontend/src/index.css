@@ -130,6 +130,50 @@ button:focus-visible {
   margin-bottom: 0.75rem;
 }
 
+.session-info {
+  font-size: 0.9em;
+}
+
+.session-info label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.session-info label:first-of-type {
+  margin-top: 0;
+}
+
+.session-transcripts .session-text,
+.session-tokens .token-summary,
+.session-tokens .token-detail {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 0.4rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  min-height: 2em;
+  max-height: 80px;
+  overflow-y: auto;
+  margin-bottom: 0.5rem;
+}
+
+.session-info .muted {
+  color: #888;
+}
+
+.token-detail {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+
+.token-detail li {
+  padding: 0.2rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .tool-call-log {
   max-height: 200px;
   overflow-y: auto;

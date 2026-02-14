@@ -17,10 +17,26 @@ interface ModeSelectorProps
   s2sProvider: string;
 }
 
-const STT_OPTIONS = [{ value: "deepgram", label: "Deepgram" }];
-const LLM_OPTIONS = [{ value: "openai", label: "OpenAI" }];
-const TTS_OPTIONS = [{ value: "cartesia", label: "Cartesia" }];
-const S2S_OPTIONS = [{ value: "openai_realtime", label: "OpenAI Realtime" }];
+const STT_OPTIONS = [
+  { value: "deepgram", label: "Deepgram (nova-3-general)" },
+  { value: "soniox", label: "Soniox (stt-rt-v4)" },
+];
+const LLM_OPTIONS = [
+  { value: "openai", label: "OpenAI (gpt-4.1)" },
+  { value: "gemini", label: "Gemini (gemini-2.0-flash)" },
+  { value: "grok", label: "Grok (grok-3-beta)" },
+];
+const TTS_OPTIONS = [{ value: "cartesia", label: "Cartesia (sonic-3)" }];
+const S2S_OPTIONS = [
+  {
+    value: "openai_realtime",
+    label: "OpenAI Realtime (gpt-4o-realtime-preview)",
+  },
+  {
+    value: "gemini_live",
+    label: "Gemini Live (gemini-2.5-flash-native-audio)",
+  },
+];
 
 export function ModeSelector({
   mode,
@@ -47,7 +63,7 @@ export function ModeSelector({
           onChange={(e) => setMode(e.target.value as SandboxMode)}
         >
           <option value="three_tier">3-tier (STT + LLM + TTS)</option>
-          <option value="s2s">Speech-to-Speech (OpenAI Realtime)</option>
+          <option value="s2s">Speech-to-Speech</option>
         </select>
       </div>
       {isThreeTier ? (

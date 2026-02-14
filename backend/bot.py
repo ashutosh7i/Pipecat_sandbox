@@ -9,6 +9,7 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -108,11 +109,51 @@ INITIAL_GREETING_PROMPT = (
 )
 
 
+def _create_stt(config: dict[str, Any]):
+    """Create STT service based on config."""
+    provider = config.get("stt_provider", "deepgram")
+    if provider == "soniox":
+        from pipecat.services.soniox.stt import SonioxSTTService
+
+        return SonioxSTTService(api_key=os.getenv("SONIOX_API_KEY"))
+    return DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
+
+
+def _create_llm(config: dict[str, Any], tools: ToolsSchema):
+    """Create LLM service based on config."""
+    provider = config.get("llm_provider", "openai")
+    if provider == "gemini":
+        from pipecat.services.google.llm import GoogleLLMService
+
+        llm = GoogleLLMService(
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            model="gemini-2.0-flash",
+        )
+    elif provider == "grok":
+        from pipecat.services.grok.llm import GrokLLMService
+
+        llm = GrokLLMService(api_key=os.getenv("XAI_API_KEY"))
+    else:
+        llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
+    llm.register_function("show_picture", _show_picture)
+    llm.register_function("show_text", _show_text)
+    return llm
+
+
+def _create_tts(config: dict[str, Any]):
+    """Create TTS service based on config."""
+    return CartesiaTTSService(
+        api_key=os.getenv("CARTESIA_API_KEY"),
+        voice_id="79a125e8-cd45-4c13-8a67-188112f4dd22",
+    )
+
+
 async def _run_bot_three_tier(
     transport: SmallWebRTCTransport,
     system_message: str,
     tools: ToolsSchema,
-) -> None:
+    config: dict[str, Any],
+) -> Pipeline:
     """Run 3-tier pipeline: STT + LLM + TTS."""
     messages = [
         {"role": "system", "content": system_message},
@@ -138,15 +179,9 @@ async def _run_bot_three_tier(
         ),
     )
 
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"))
-    llm.register_function("show_picture", _show_picture)
-    llm.register_function("show_text", _show_text)
-
-    stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-    tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id="79a125e8-cd45-4c13-8a67-188112f4dd22",
-    )
+    stt = _create_stt(config)
+    llm = _create_llm(config, tools)
+    tts = _create_tts(config)
 
     return Pipeline(
         [
@@ -165,6 +200,20 @@ async def _run_bot_s2s(
     transport: SmallWebRTCTransport,
     system_message: str,
     tools: ToolsSchema,
+    config: dict[str, Any],
+) -> Pipeline:
+    """Run S2S pipeline: OpenAI Realtime or Gemini Live."""
+    provider = config.get("s2s_provider", "openai_realtime")
+    if provider == "gemini_live":
+        return await _run_bot_s2s_gemini(transport, system_message, tools, config)
+    return await _run_bot_s2s_openai(transport, system_message, tools, config)
+
+
+async def _run_bot_s2s_openai(
+    transport: SmallWebRTCTransport,
+    system_message: str,
+    tools: ToolsSchema,
+    config: dict[str, Any],
 ) -> Pipeline:
     """Run S2S pipeline using OpenAI Realtime."""
     try:
@@ -179,7 +228,7 @@ async def _run_bot_s2s(
         )
     except ImportError as e:
         logger.error(f"OpenAI Realtime not available: {e}. Fallback to 3-tier.")
-        return await _run_bot_three_tier(transport, system_message, tools)
+        return await _run_bot_three_tier(transport, system_message, tools, config)
 
     session_properties = SessionProperties(
         instructions=system_message,
@@ -202,14 +251,11 @@ async def _run_bot_s2s(
     llm.register_function("show_picture", _show_picture)
     llm.register_function("show_text", _show_text)
 
-    # Use universal LLMContext + LLMContextAggregatorPair (OpenAILLMContext/create_context_aggregator deprecated)
     messages = [
         {"role": "system", "content": system_message},
         {"role": "user", "content": INITIAL_GREETING_PROMPT},
     ]
     context = LLMContext(messages=messages, tools=tools)
-    # S2S: OpenAI Realtime handles turn detection server-side. Use ExternalUserTurnStrategies
-    # to avoid duplicate/conflicting turn logic and reduce latency/stuttering.
     context_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -217,7 +263,7 @@ async def _run_bot_s2s(
         ),
     )
 
-    pipeline = Pipeline(
+    return Pipeline(
         [
             transport.input(),
             context_aggregator.user(),
@@ -226,7 +272,60 @@ async def _run_bot_s2s(
             context_aggregator.assistant(),
         ]
     )
-    return pipeline
+
+
+async def _run_bot_s2s_gemini(
+    transport: SmallWebRTCTransport,
+    system_message: str,
+    tools: ToolsSchema,
+    config: dict[str, Any],
+) -> Pipeline:
+    """Run S2S pipeline using Gemini Live (per Pipecat docs and official example)."""
+    try:
+        from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+    except ImportError as e:
+        logger.error(f"Gemini Live not available: {e}. Install: pip install pipecat-ai[google] google-genai")
+        return await _run_bot_s2s_openai(transport, system_message, tools, config)
+
+    # Docs: https://docs.pipecat.ai/server/services/s2s/gemini-live
+    # Default model for native audio: gemini-2.5-flash-native-audio-preview-12-2025
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        logger.error("GOOGLE_API_KEY not set. Gemini Live requires it.")
+        return await _run_bot_s2s_openai(transport, system_message, tools, config)
+
+    llm = GeminiLiveLLMService(
+        api_key=api_key,
+        model="models/gemini-2.5-flash-native-audio-preview-12-2025",
+        voice_id="Charon",
+        system_instruction=system_message,
+        tools=tools,
+    )
+    llm.register_function("show_picture", _show_picture)
+    llm.register_function("show_text", _show_text)
+
+    # Align with official example: context + user/assistant aggregators with VAD for phrase alignment
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": INITIAL_GREETING_PROMPT},
+    ]
+    context = LLMContext(messages=messages, tools=tools)
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.5)),
+        ),
+    )
+
+    return Pipeline(
+        [
+            transport.input(),
+            user_aggregator,
+            llm,
+            transport.output(),
+            assistant_aggregator,
+        ]
+    )
 
 
 async def run_bot(webrtc_connection: Any, config: dict[str, Any]) -> None:
@@ -251,9 +350,9 @@ async def run_bot(webrtc_connection: Any, config: dict[str, Any]) -> None:
     tools = _create_tools_schema()
 
     if mode == MODE_S2S:
-        pipeline = await _run_bot_s2s(transport, system_message, tools)
+        pipeline = await _run_bot_s2s(transport, system_message, tools, config)
     else:
-        pipeline = await _run_bot_three_tier(transport, system_message, tools)
+        pipeline = await _run_bot_three_tier(transport, system_message, tools, config)
 
     task = PipelineTask(
         pipeline,

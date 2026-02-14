@@ -4,22 +4,63 @@ import { PromptEditor } from "./PromptEditor";
 import { ModeSelector } from "./ModeSelector";
 import { ToolCallLog } from "./ToolCallLog";
 import { VoiceSession } from "./VoiceSession";
+import { SessionInfo } from "./SessionInfo";
 import { useSandboxState } from "../hooks/useSandboxState";
 import { useToolCalls } from "../hooks/useToolCalls";
-import { createPipecatClient } from "../lib/pipecatClient";
+import { useSessionInfo } from "../hooks/useSessionInfo";
+import {
+  createPipecatClient,
+  parseMetricsToTokenUsage,
+} from "../lib/pipecatClient";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:7860";
 
 export function Sandbox() {
   const state = useSandboxState();
   const { toolCalls, addToolCall, clearToolCalls } = useToolCalls();
+  const {
+    userTranscript,
+    botOutput,
+    tokenUsage,
+    addUserTranscript,
+    appendBotOutput,
+    addTokenUsage,
+    clearSession,
+  } = useSessionInfo();
   const onToolCallRef = useRef(addToolCall);
   onToolCallRef.current = addToolCall;
 
-  const client = useMemo(() => createPipecatClient(onToolCallRef), []);
+  const sessionCallbacksRef = useRef<{
+    onUserTranscript: (text: string, final: boolean) => void;
+    onBotOutput: (text: string, spoken: boolean) => void;
+    onMetrics: (data: unknown) => void;
+  }>({
+    onUserTranscript: addUserTranscript,
+    onBotOutput: appendBotOutput,
+    onMetrics: (data: unknown) => {
+      for (const u of parseMetricsToTokenUsage(data)) {
+        addTokenUsage(u);
+      }
+    },
+  });
+  sessionCallbacksRef.current = {
+    onUserTranscript: addUserTranscript,
+    onBotOutput: appendBotOutput,
+    onMetrics: (data: unknown) => {
+      for (const u of parseMetricsToTokenUsage(data)) {
+        addTokenUsage(u);
+      }
+    },
+  };
+
+  const client = useMemo(
+    () => createPipecatClient(onToolCallRef, sessionCallbacksRef),
+    []
+  );
 
   const handleConnect = useCallback(async () => {
     clearToolCalls();
+    clearSession();
     await client.startBotAndConnect({
       endpoint: `${API_URL}/api/start`,
       requestData: {
@@ -32,7 +73,7 @@ export function Sandbox() {
         s2s_provider: state.s2sProvider,
       },
     });
-  }, [client, state, clearToolCalls]);
+  }, [client, state, clearToolCalls, clearSession]);
 
   const handleDisconnect = useCallback(async () => {
     await client.disconnect();
@@ -69,6 +110,14 @@ export function Sandbox() {
             <VoiceSession
               onConnect={handleConnect}
               onDisconnect={handleDisconnect}
+            />
+          </section>
+          <section>
+            <SessionInfo
+              userTranscript={userTranscript}
+              botOutput={botOutput}
+              tokenUsage={tokenUsage}
+              mode={state.mode}
             />
           </section>
           <section>
